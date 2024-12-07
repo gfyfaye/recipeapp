@@ -1,0 +1,3 @@
+requests
+jsons
+boto3
