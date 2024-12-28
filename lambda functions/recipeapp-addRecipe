@@ -1,0 +1,84 @@
+ #
+# Adds new allergy into Recipeapp database.
+#
+
+import json
+import boto3
+import os
+import datatier
+
+from configparser import ConfigParser
+
+def lambda_handler(event, context):
+  try:
+    print("**STARTING**")
+    print("**lambda: recipeapp_addUser**")
+    
+    #
+    # setup AWS based on config file:
+    #
+    config_file = 'recipeapp-config.ini'
+    os.environ['AWS_SHARED_CREDENTIALS_FILE'] = config_file
+    
+    configur = ConfigParser()
+    configur.read(config_file)
+    
+    #
+    # configure for RDS access
+    #
+    rds_endpoint = configur.get('rds', 'endpoint')
+    rds_portnum = int(configur.get('rds', 'port_number'))
+    rds_username = configur.get('rds', 'user_name')
+    rds_pwd = configur.get('rds', 'user_pwd')
+    rds_dbname = configur.get('rds', 'db_name')
+
+    # Extract userid and allergy from the event
+    if "pathParameters" in event:
+      if "userid" in event["pathParameters"] and "allergy" in event["pathParameters"]:
+        userid = event["pathParameters"]["userid"]
+        allergy = event["pathParameters"]["allergy"]
+      else:
+        raise Exception("requires userid and allergy parameters in pathParameters")
+
+    #
+    # open connection to the database:
+    #
+    print("**Opening connection**")
+    
+    dbConn = datatier.get_dbConn(rds_endpoint, rds_portnum, rds_username, rds_pwd, rds_dbname)
+
+    # sql query to add user to db
+    #
+    sql_check_user = "select * from users where userid = %s"
+    rows_check_user = datatier.retrieve_all_rows(dbConn, sql_check_user, [userid])
+
+    if not rows_check_user: 
+      output = 0
+      return {
+        'statusCode': 200,
+        'body': json.dumps(output)
+      }
+      
+    sql = "insert into allergies set userid = %s, allergyname = %s;"
+    
+    rows = datatier.perform_action(dbConn, sql, [userid,allergy])
+    
+    #
+    # respond in an HTTP-like way, i.e. with a status
+    # code and body in JSON format:
+    #
+    print("**DONE**")
+    
+    return {
+      'statusCode': 200,
+      'body': json.dumps(rows)
+    }
+    
+  except Exception as err:
+    print("**ERROR**")
+    print(str(err))
+    
+    return {
+      'statusCode': 500,
+      'body': json.dumps(str(err))
+    }

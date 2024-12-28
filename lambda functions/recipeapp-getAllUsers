@@ -1,0 +1,98 @@
+#
+# Retrieves and returns all the users in the 
+# recipeapp database.
+#
+
+import json
+import boto3
+import os
+import datatier
+
+from configparser import ConfigParser
+
+def lambda_handler(event, context):
+  try:
+    print("**STARTING**")
+    print("**lambda: recipeapp-getAllUsers**")
+    
+    #
+    # setup AWS based on config file:
+    #
+    config_file = 'recipeapp-config.ini'
+    os.environ['AWS_SHARED_CREDENTIALS_FILE'] = config_file
+    
+    configur = ConfigParser()
+    configur.read(config_file)
+    
+    #
+    # configure for RDS access
+    #
+    rds_endpoint = configur.get('rds', 'endpoint')
+    rds_portnum = int(configur.get('rds', 'port_number'))
+    rds_username = configur.get('rds', 'user_name')
+    rds_pwd = configur.get('rds', 'user_pwd')
+    rds_dbname = configur.get('rds', 'db_name')
+
+    #
+    # open connection to the database:
+    #
+    print("**Opening connection**")
+    
+    dbConn = datatier.get_dbConn(rds_endpoint, rds_portnum, rds_username, rds_pwd, rds_dbname)
+    
+    #
+    # now retrieve all the users:
+    #
+    print("**Retrieving data**")
+
+    #
+    # TODO #1 of 1: write sql query to select all users from the 
+    # users table, ordered by userid
+    #
+    sql_get_users = "SELECT * FROM users ORDER BY userid;"
+    users = datatier.retrieve_all_rows(dbConn, sql_get_users)
+
+    # Prepare SQL for retrieving allergies
+    sql_get_allergies = "SELECT allergyname FROM allergies WHERE userid = %s;"
+
+    # Format users with their allergies
+    users_with_allergies = []
+    for user in users:
+        userid = user[0]  # Assuming `userid` is the first column
+        firstname = user[1]
+        lastname = user[2]
+        allergies = []
+
+        # Retrieve allergies for this user
+        allergy_rows = datatier.retrieve_all_rows(dbConn, sql_get_allergies, [userid])
+        for row in allergy_rows:
+          temp = row[0].replace("%20", " ")
+          allergies.append(temp)
+        #allergies = [row[0] for row in allergy_rows]  # Extract allergy names
+
+        # Add user with their allergies to the result
+        user_data = {
+            "userid": userid,
+            "firstname": firstname,
+            "lastname": lastname,
+            "allergies": allergies
+        }
+        users_with_allergies.append(user_data)
+
+    print("**DONE, returning data**")
+    print("users_with_allergies: ", users_with_allergies)
+
+    # Return formatted data
+    return {
+        'statusCode': 200,
+        'body': json.dumps(users_with_allergies)
+    }
+    
+  except Exception as err:
+    print("**ERROR**")
+    print(str(err))
+    
+    return {
+      'statusCode': 500,
+      'body': json.dumps(str(err))
+    }

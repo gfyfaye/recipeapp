@@ -1,0 +1,170 @@
+import json
+import boto3
+import os
+import requests
+from configparser import ConfigParser
+import datatier
+
+def lambda_handler(event, context):
+    try:
+        print("**STARTING**")
+        
+        # Setup AWS based on config file
+        config_file = 'recipeapp-config.ini'
+        os.environ['AWS_SHARED_CREDENTIALS_FILE'] = config_file
+        
+        configur = ConfigParser()
+        configur.read(config_file)
+        
+        # Configure for RDS access
+        rds_endpoint = configur.get('rds', 'endpoint')
+        rds_portnum = int(configur.get('rds', 'port_number'))
+        rds_username = configur.get('rds', 'user_name')
+        rds_pwd = configur.get('rds', 'user_pwd')
+        rds_dbname = configur.get('rds', 'db_name')
+
+        # Extract userid and category from event
+        if "pathParameters" in event:
+            if "userid" in event["pathParameters"] and "category" in event["pathParameters"]:
+                userid = event["pathParameters"].get("userid")
+                category = event["pathParameters"].get("category")
+                # if not userid or not category:
+                #     raise ValueError("Path parameters 'userid' and 'category' are required")
+            else:
+                raise ValueError("Path parameters are missing")
+
+        # Open database connection
+        print("Category: ", category)
+
+        print("**Opening connection**")
+        dbConn = datatier.get_dbConn(rds_endpoint, rds_portnum, rds_username, rds_pwd, rds_dbname)
+
+        # SQL query to get allergies of user
+        sql = "SELECT allergyname FROM allergies WHERE userid = %s"
+        rows = datatier.retrieve_all_rows(dbConn, sql, [userid])
+
+        if not rows: 
+            return {
+                'statusCode': 200,
+                'body': json.dumps("Userid does not exist.")
+            }
+
+        allergieslist = [row[0] for row in rows]
+        
+        for a in allergieslist: 
+            temp = a.replace("%20", " ")
+            if category.lower() in temp.lower() or temp.lower() in category.lower():
+                return {
+                'statusCode': 200,
+                'body': json.dumps("No recipe was found.")
+            } 
+        
+
+        # Query TheMealDB API
+        print(f"Fetching recipes for category: {category}")
+        url = f"https://www.themealdb.com/api/json/v1/1/filter.php?c={category}"
+        res = requests.get(url)
+
+        # for meal in res.json["meals"]:
+        #     print(meal)
+        mealids = []
+        for meal in res.json().get("meals"):
+            mealids.append(meal.get("idMeal"))
+
+            # print("")
+        
+        print("Mealids: ", mealids)
+        # www.themealdb.com/api/json/v1/1/lookup.php?i=52772
+
+        # Query TheMealDB API by meal ID
+        recipefound = 0
+        allergyfound = 0 
+        index = 0
+        final_id = None
+        final_mealname = ""
+        final_instructions = ""
+        ingredientslist = []
+
+        while (recipefound != 1 and index < len(mealids)):
+            
+            id = mealids[index]
+            allergyfound = 0
+
+            print("Checking mealid: ", id)
+            print("Alelrgies: ", allergieslist)
+
+            # go through each recipe
+            print(f"Fetching recipes by ID: {id}")
+            url = f"https://www.themealdb.com/api/json/v1/1/lookup.php?i={id}"
+            print("url:", url)
+            res = requests.get(url)
+            # print("res", res)
+            # print("body: ", res.json())
+            body = res.json().get("meals")
+            # print("the body", body)
+            #print("strIngredient1: ", body[0].get("strIngredient1"))
+            # go thorugh each ingredient in recipe
+            for i in range(1,21):
+                name = "strIngredient" + str(i)
+                #print("name: ", name)
+                ingredient = body[0].get(name)
+                # print("ingredient: ", ingredient)
+                if ingredient != "" and ingredient is not None:
+                    print("Adding ingredientes to list")
+                    ingredientslist.append(ingredient)
+
+                    for a in allergieslist: 
+                        print("Allergy: ", a)
+                        print("Ingredient: ", ingredient)
+                        temp = a.replace("%20", " ")
+                        if temp.lower() in ingredient.lower():
+                            
+                            print("Allergy has been found: ", ingredient)
+                            allergyfound = 1
+
+            print("Allergyfound: ", allergyfound)
+            if allergyfound == 0:
+                print("No allergies were found")
+                recipefound = 1 # we found the recipe, leave loop
+                final_id = id
+                final_mealname = body[0].get("strMeal")
+                final_instructions = body[0].get("strInstructions")
+                break
+            
+            index = index + 1
+            ingredientslist = []
+        
+
+        # Recipe has been found
+        # insert recipe into database
+        if final_id is not None:
+            sql = "INSERT recipes SET mealdbid = %s, recipename = %s"
+            rows = datatier.perform_action(dbConn, sql, [final_id,final_mealname])
+
+            #creating console print recipe
+
+            output = "\nRecipe for " + final_mealname + "\n\nInstructions:\n" + final_instructions + "\n\nIngredients:\n"
+            for i in ingredientslist:
+                output += "- " + i + "\n"
+        else: 
+            output = "No recipe was found."
+
+        print("output: ", output)
+        
+        #
+        # respond in an HTTP-like way, i.e. with a status
+        # code and body in JSON format:
+        #
+        print("**DONE, returning rows**")
+        
+        return {
+            'statusCode': 200,
+            'body': json.dumps(output)
+        }
+
+    except Exception as err:
+        print("**ERROR**", str(err))
+        return {
+            'statusCode': 500,
+            'body': json.dumps({"error": str(err)})
+        }

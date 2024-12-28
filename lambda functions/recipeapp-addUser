@@ -1,0 +1,81 @@
+#
+# Adds new user into Recipeapp database.
+#
+
+import json
+import boto3
+import os
+import datatier
+
+from configparser import ConfigParser
+
+def lambda_handler(event, context):
+  try:
+    print("**STARTING**")
+    print("**lambda: recipeapp_addUser**")
+    
+    #
+    # setup AWS based on config file:
+    #
+    config_file = 'recipeapp-config.ini'
+    os.environ['AWS_SHARED_CREDENTIALS_FILE'] = config_file
+    
+    configur = ConfigParser()
+    configur.read(config_file)
+    
+    #
+    # configure for RDS access
+    #
+    rds_endpoint = configur.get('rds', 'endpoint')
+    rds_portnum = int(configur.get('rds', 'port_number'))
+    rds_username = configur.get('rds', 'user_name')
+    rds_pwd = configur.get('rds', 'user_pwd')
+    rds_dbname = configur.get('rds', 'db_name')
+
+    # Extract firstname and lastname from the event
+    if "pathParameters" in event:
+      if "firstname" in event["pathParameters"] and "lastname" in event["pathParameters"]:
+        firstname = event["pathParameters"]["firstname"]
+        lastname = event["pathParameters"]["lastname"]
+      else:
+        raise Exception("requires firstname and lastname parameters in pathParameters")
+
+    print("firstname: ", firstname)
+    print("lastname: ", lastname)
+
+    #
+    # open connection to the database:
+    #
+    print("**Opening connection**")
+    
+    dbConn = datatier.get_dbConn(rds_endpoint, rds_portnum, rds_username, rds_pwd, rds_dbname)
+
+    # sql query to add user to db
+    #
+    sql = "insert into users set firstname = %s, lastname = %s;"
+
+
+    
+    rows = datatier.perform_action(dbConn, sql, [firstname,lastname])
+    print("Rows:", rows)
+    
+
+    #
+    # respond in an HTTP-like way, i.e. with a status
+    # code and body in JSON format:
+    #
+    print("**DONE**")
+    
+    return {
+      'statusCode': 200,
+      'body': json.dumps(rows)
+    }
+    
+  except Exception as err:
+    print("**ERROR**")
+    print(str(err))
+    
+    return {
+      'statusCode': 500,
+      'body': json.dumps(str(err))
+    }
